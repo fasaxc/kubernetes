@@ -73,9 +73,7 @@ Once you've downloaded the image, use it to boot your Kubernetes master.  Once b
 *On another machine*, download the `calico-kubernetes` repository, which contains the necessary cloud-config files for this guide, and make a copy of the file `master-config-template.yaml`.
 
 ```
-wget https://github.com/projectcalico/calico-kubernetes/archive/master.tar.gz
-tar -xvf master.tar.gz
-cp calico-kubernetes-master/config/cloud-config/master-config-template.yaml master-config.yaml
+wget -O master-config.yaml https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/cloud-config/master-config-template.yaml
 ```
 
 You'll need to replace the following variables in the `master-config.yaml` file.
@@ -87,7 +85,35 @@ Move the edited `master-config.yaml` to your Kubernetes master machine.  The Cor
 sudo coreos-install -d /dev/sda -C stable -c master-config.yaml
 ```
 
-Once complete, eject the bootable ISO and restart the server.  When it comes back up, you should have SSH access as the `core` user using the public key provided in the `master-config.yaml` file.  It may take a few minutes for the machine to be fully configured with Kubernetes and Calico.
+Once complete, restart the server and boot into `/dev/sda`. When it comes back up, you should have SSH access as the `core` user using the public key provided in the `master-config.yaml` file.
+
+Next, you will need to configure your cluster's TLS assets. To get started with Kubernetes client certificate authentication, follow the [CoreOS guide to generating Kubernetes TLS assets using OpenSSL](https://coreos.com/kubernetes/docs/latest/openssl.html).
+
+On your master, you will need to move your client and apiserver certificates to the `/etc/kubernetes/ssl/` folder with the appropriate permissions.
+```
+sudo mv -t /etc/kubernetes/ssl/ ca.pem apiserver.pem apiserver-key.pem
+
+# Set Permissions
+sudo chmod 600 /etc/kubernetes/ssl/apiserver-key.pem
+sudo chown root:root /etc/kubernetes/ssl/apiserver-key.pem
+```
+
+If your apiserver did not restart to pick up these certificates, you can restart your kubelet to trigger a container refresh.
+```
+sudo systemctl restart kubelet
+```
+
+Before you configure the rest of your nodes, you will need to create an authentication token for Calico to access the API. Run the following command on your master or workstation and save the result.
+```
+kubectl create -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: calico
+EOF
+export AUTH_TOKEN=$(kubectl describe secret calico-token | grep token: | cut -f 2)
+```
+
 
 ## Configure the compute hosts
 
@@ -95,16 +121,22 @@ Once complete, eject the bootable ISO and restart the server.  When it comes bac
 
 First, boot up the node machine using the bootable ISO we downloaded earlier.  You should be automatically logged in as the `core` user.
 
-Make a copy of the `node-config-template.yaml` in the `calico-kubernetes` repository for this machine.
+Make a copy of the `node-config-template.yaml` for this machine.
 
 ```
-cp calico-kubernetes-master/config/cloud-config/node-config-template.yaml node-config.yaml
+wget -O node-config.yaml https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/cloud-config/node-config-template.yaml
 ```
 
 You'll need to replace the following variables in the `node-config.yaml` file to match your deployment.
 - `<HOSTNAME>`: Hostname for this node (e.g. kube-node1, kube-node2)
 - `<SSH_PUBLIC_KEY>`: The public key you will use for SSH access to this server.
 - `<KUBERNETES_MASTER>`: The IPv4 address of the Kubernetes master.
+- `<AUTH_TOKEN>`: The API authentication token generated in the previous step.
+
+Next, you will need to add the certificates generated in the previous step to the cloud-config. Replace the following placeholders with your TLS assests.
+- `<CA_CERT>`: Complete contents of `ca.pem`
+- `<WORKER_CERT>`: Complete contents of `worker.pem`
+- `<WORKER_KEY>`: Complete contents of `worker-key.pem`
 
 Move the modified `node-config.yaml` to your Kubernetes node machine and install and configure CoreOS on the node using the following command.
 
@@ -112,11 +144,58 @@ Move the modified `node-config.yaml` to your Kubernetes node machine and install
 sudo coreos-install -d /dev/sda -C stable -c node-config.yaml
 ```
 
-Once complete, eject the bootable disc and restart the server.  When it comes back up, you should have SSH access as the `core` user using the public key provided in the `node-config.yaml` file.  It will take some time for the node to be fully configured.  Once fully configured, you can check that the node is running with the following command on the Kubernetes master.
+Once complete, restart the server and boot into `/dev/sda`. When it comes back up, you should have SSH access as the `core` user using the public key provided in the `node-config.yaml` file.  It will take some time for the node to be fully configured.
+
+## Configure Kubeconfig
+To administrate your cluster from a separate host, you will need the client and admin certificates generated earlier (`ca.pem`, `admin.pem`, `admin-key.pem`). With certificates in place, run the following commands with the appropriate filepaths.
+```
+kubectl config set-cluster calico-cluster --server=https://<KUBERNETES_MASTER> --certificate-authority=<CA_CERT_PATH>
+kubectl config set-credentials calico-admin --certificate-authority=<CA_CERT_PATH> --client-key=<ADMIN_KEY_PATH> --client-certificate=<ADMIN_CERT_PATH>
+kubectl config set-context calico --cluster=calico-cluster --user=calico-admin
+kubectl config use-context calico
+```
+
+Check your work with `kubectl get nodes`.
+
+## Install the DNS Addon
+
+Most Kubernetes deployments will require the DNS addon for service discovery. To install DNS, create the skydns service and replication controller provided.
 
 ```
-kubectl get nodes
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/dns/skydns.yaml
+kubectl create -f skydns.yaml
 ```
+
+## Launch other Services With Calico-Kubernetes
+
+At this point, you have a fully functioning cluster running on Kubernetes with a master and two nodes networked with Calico. You can now follow any of the [standard documentation](../../examples/) to set up other services on your cluster.
+
+## Connectivity to outside the cluster
+
+Because containers in this guide have private `192.168.0.0/16` IPs, you will need NAT to allow connectivity between containers and the internet. However, in a production data center deployment, NAT is not always necessary, since Calico can peer with the data center's border routers over BGP.
+
+### NAT on the nodes
+
+The simplest method for enabling connectivity from containers to the internet is to use an `iptables` masquerade rule. This is the standard mechanism recommended in the [Kubernetes GCE environment](../../docs/admin/networking.md#google-compute-engine-gce).
+
+We need to NAT traffic that has a destination outside of the cluster. Cluster-internal traffic includes the Kubernetes master/nodes, and the traffic within the container IP subnet. A suitable masquerade chain would follow this pattern below, replacing the following variables:
+- `CONTAINER_SUBNET`: The cluster-wide subnet from which container IPs are chosen. Run `ETCD_AUTHORITY=127.0.0.1:6666 calicoctl pool show` on the Kubernetes master to find your configured container subnet.
+- `KUBERNETES_HOST_SUBNET`: The subnet from which Kubernetes node / master IP addresses have been chosen.
+- `HOST_INTERFACE`: The interface on the Kubernetes node which is used for external connectivity.
+
+```
+sudo iptables -t nat -N KUBE-OUTBOUND-NAT
+sudo iptables -t nat -A KUBE-OUTBOUND-NAT -d <CONTAINER_SUBNET> -o <HOST_INTERFACE> -j RETURN
+sudo iptables -t nat -A KUBE-OUTBOUND-NAT -d <KUBERNETES_HOST_SUBNET> -o <HOST_INTERFACE> -j RETURN
+sudo iptables -t nat -A KUBE-OUTBOUND-NAT -j MASQUERADE
+sudo iptables -t nat -A POSTROUTING -j KUBE-OUTBOUND-NAT
+```
+
+This chain should be applied on the master and all nodes. In production, these rules should be persisted, e.g. with `iptables-persistent`.
+
+### NAT at the border router
+
+In a data center environment, it is recommended to configure Calico to peer with the border routers over BGP. This means that the container IPs will be routable anywhere in the data center, and so NAT is not needed on the nodes (though it may be enabled at the data center edge to allow outbound-only internet connectivity).
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->
 [![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/docs/getting-started-guides/coreos/bare_metal_calico.md?pixel)]()
