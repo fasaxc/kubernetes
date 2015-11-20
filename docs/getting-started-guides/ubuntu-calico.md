@@ -58,13 +58,21 @@ On each Node:
 3. All machines should have connectivity to each other and the internet.
 4. This demo assumes that none of the hosts have been configured with any Kubernetes or Calico software.
 
+## Generate TLS Assets
+
+This guide will set up a secure, TLS authenticated API server. Before starting Kubernetes services, you will need to generate TLS Assets for secure client and worker authentication. To get started with OpenSSL certificates, we suggest the CoreOS [guide for generating Kubernetes TLS Assets](https://coreos.com/kubernetes/docs/latest/openssl.html).
+
 ## Setup Master
 
-Download the `calico-kubernetes` repository, which contains the necessary configuration for this guide.
+### Place TLS Assets
+The master requires three certificates, `ca.pem`, `apiserver.pem`, and `apiserver-key.pem`. Send them to your master host and to move them to the `/etc/kubernetes/ssl` folder with the appropriate permissions.
 
 ```
-wget https://github.com/projectcalico/calico-kubernetes/archive/master.tar.gz
-tar -xvf master.tar.gz
+sudo mv -t /etc/kubernetes/ssl/ ca.pem apiserver.pem apiserver-key.pem
+
+# Set Permissions
+sudo chmod 600 /etc/kubernetes/ssl/apiserver-key.pem
+sudo chown root:root /etc/kubernetes/ssl/apiserver-key.pem
 ```
 
 ### Install Kubernetes on Master
@@ -75,11 +83,9 @@ We'll use the `kubelet` to bootstrap the Kubernetes master processes as containe
 
 ```
 # Get the Kubernetes Release.
-wget https://github.com/kubernetes/kubernetes/releases/download/v1.1.2/kubernetes.tar.gz
-
-# Extract the Kubernetes binaries.
-tar -xf kubernetes.tar.gz
-tar -xf kubernetes/server/kubernetes-server-linux-amd64.tar.gz
+sudo wget -N -P /usr/bin http://storage.googleapis.com/kubernetes-release/release/v1.1.2/bin/linux/amd64/kubectl
+sudo wget -N -P /usr/bin http://storage.googleapis.com/kubernetes-release/release/v1.1.2/bin/linux/amd64/kubelet
+sudo chmod +x /usr/bin/kubelet /usr/bin/kubectl
 
 # Install the `kubelet` and `kubectl` binaries.
 sudo cp -f kubernetes/server/bin/kubelet /usr/bin
@@ -88,9 +94,12 @@ sudo cp -f kubernetes/server/bin/kubectl /usr/bin
 
 2.) Install the `kubelet` systemd unit file and start the `kubelet`.
 
+On your master, download the `calico-kubernetes` repository, which contains the necessary configuration for this guide.
+
 ```
 # Install the unit file
-sudo cp -f calico-kubernetes-master/config/master/kubelet.service /etc/systemd
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/kubelet.service
+sudo mv -f kubelet.service /etc/systemd
 
 # Enable the unit file so that it runs on boot
 sudo systemctl enable /etc/systemd/kubelet.service
@@ -104,19 +113,24 @@ sudo systemctl start kubelet.service
 ```
 # Install the provided manifest
 sudo mkdir -p /etc/kubernetes/manifests
-sudo cp -f calico-kubernetes-master/config/master/kubernetes-master.manifest /etc/kubernetes/manifests
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/kubernetes-master.manifest
+sudo mv -f kubernetes-master.manifest /etc/kubernetes/manifests
 ```
 
-You should see the `apiserver`, `controller-manager` and `scheduler` containers running.  It may take some time to download the docker images - you can check if the containers are running using `docker ps`.
+You should see the `etcd`, `apiserver`, `controller-manager`, `scheduler`, and `kube-proxy` containers running. It may take some time to download the docker images and settle dependencies - you can check if the containers are running using `docker ps`.
 
 ### Install Calico on Master
 
 We need to install Calico on the master so that the master can route to the pods in our Kubernetes cluster.
 
-First, start the etcd instance used by Calico.  We'll run this as a static Kubernetes pod.  Before we install it, we'll need to edit the manifest.  Open `calico-kubernetes-master/config/master/calico-etcd.manifest` and replace all instances of `<PRIVATE_IPV4>` with your master's IP address.  Then, copy the file to the `/etc/kubernetes/manifests` directory.
-
+First, start the etcd instance used by Calico. We'll run this as a static Kubernetes pod using the following manifest.
 ```
-sudo cp -f calico-kubernetes-master/config/master/calico-etcd.manifest /etc/kubernetes/manifests
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-etcd.manifest
+```
+
+Before installing, replace all instances of `<PRIVATE_IPV4>` with your master's IP address. Then, move the file to the `/etc/kubernetes/manifests` directory.
+```
+sudo mv -f calico-etcd.manifest /etc/kubernetes/manifests
 ```
 
 > Note: For simplicity, in this demonstration we are using a single instance of etcd.  In a production deployment a distributed etcd cluster is recommended for redundancy.
@@ -125,15 +139,17 @@ Now, install Calico.  We'll need the `calicoctl` tool to do this.
 
 ```
 # Install the `calicoctl` binary
-wget https://github.com/projectcalico/calico-docker/releases/download/v0.9.0/calicoctl
+wget https://github.com/projectcalico/calico-docker/releases/download/v0.12.0/calicoctl
 chmod +x calicoctl
 sudo mv calicoctl /usr/bin
 
 # Fetch the calico/node container
-sudo docker pull calico/node:v0.9.0
+sudo docker pull calico/node:v0.12.0
 
 # Install, enable, and start the Calico service
-sudo cp -f calico-kubernetes-master/config/master/calico-node.service /etc/systemd
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-node.service
+sudo mv calico-node.service /etc/systemd
+
 sudo systemctl enable /etc/systemd/calico-node.service
 sudo systemctl start calico-node.service
 ```
@@ -142,24 +158,29 @@ sudo systemctl start calico-node.service
 
 The following steps should be run on each Kubernetes node.
 
+### Place TLS Assets
+Worker nodes require three certificates, `ca.pem`, `worker.pem`, and `worker-key.pem`. Send them to your host and to move them to the `/etc/kubernetes/ssl` folder with the appropriate permissions.
+
+```
+sudo mv -t /etc/kubernetes/ssl/ ca.pem worker.pem worker-key.pem
+
+# Set Permissions
+sudo chmod 600 /etc/kubernetes/ssl/worker-key.pem
+sudo chown root:root /etc/kubernetes/ssl/worker-key.pem
+```
+
 ### Configure environment variables for `kubelet` process
+>The following steps will set up a single Kubernetes node for use as a compute host. Run these steps to deploy each Kubernetes node in your cluster.
 
-1.) Download the `calico-kubernetes` repository, which contains the necessary configuration for this guide.
-
-```
-wget https://github.com/projectcalico/calico-kubernetes/archive/master.tar.gz
-tar -xvf master.tar.gz
-```
-
-2.) Copy the network-environment-template from the `node` directory
+1.) Download the network-environment-template from the `calico-kubernetes` repository.
 
 ```
-cp calico-kubernetes-master/config/node/network-environment-template network-environment
+wget -O network-environment https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/network-environment-template
 ```
 
-3.) Edit `network-environment` to represent this node's settings.
+2.) Edit `network-environment` to represent this node's settings.
 
-4.) Move `network-environment` into `/etc`
+3.) Move `network-environment` into `/etc`
 
 ```
 sudo mv -f network-environment /etc
@@ -167,19 +188,21 @@ sudo mv -f network-environment /etc
 
 ### Install Calico on the Node
 
-We'll install Calico using the provided `calico-node.service` systemd unit file.
+On your compute hosts, it is important that you install Calico before Kubernetes. We'll install Calico using the provided `calico-node.service` systemd unit file.
 
 ```
 # Install the `calicoctl` binary
-wget https://github.com/projectcalico/calico-docker/releases/download/v0.9.0/calicoctl
+wget https://github.com/projectcalico/calico-docker/releases/download/v0.12.0/calicoctl
 chmod +x calicoctl
 sudo mv calicoctl /usr/bin
 
 # Fetch the calico/node container
-sudo docker pull calico/node:v0.9.0
+sudo docker pull calico/node:v0.12.0
 
 # Install, enable, and start the Calico service
-sudo cp -f calico-kubernetes-master/config/node/calico-node.service /etc/systemd
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/calico-node.service
+sudo mv calico-node.service /etc/systemd
+
 sudo systemctl enable /etc/systemd/calico-node.service
 sudo systemctl start calico-node.service
 ```
@@ -189,12 +212,11 @@ sudo systemctl start calico-node.service
 1.) Download & Install the Kubernetes binaries.
 
 ```
-# Get the Kubernetes Release.
-wget https://github.com/kubernetes/kubernetes/releases/download/v1.1.0/kubernetes.tar.gz
 
-# Extract the Kubernetes binaries.
-tar -xf kubernetes.tar.gz
-tar -xf kubernetes/server/kubernetes-server-linux-amd64.tar.gz
+# Get the Kubernetes Release.
+sudo wget -N -P /usr/bin http://storage.googleapis.com/kubernetes-release/release/v1.1.2/bin/linux/amd64/kube-proxy
+sudo wget -N -P /usr/bin http://storage.googleapis.com/kubernetes-release/release/v1.1.2/bin/linux/amd64/kubelet
+sudo chmod +x /usr/bin/kubelet /usr/bin/kube-proxy
 
 # Install the `kubelet` and `kube-proxy` binaries.
 sudo cp -f kubernetes/server/bin/kubelet /usr/bin
@@ -205,25 +227,38 @@ sudo cp -f kubernetes/server/bin/kube-proxy /usr/bin
 
 ```
 # Install the unit files
-sudo cp -f calico-kubernetes-master/config/node/kubelet.service /etc/systemd
-sudo cp -f calico-kubernetes-master/config/node/kube-proxy.service /etc/systemd
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/kubelet.service
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/kube-proxy.service
+sudo mv -f kubelet.service /etc/systemd
+sudo mv -f kube-proxy.service /etc/systemd
 
-# Enable the unit files so that they run on boot
+# Enable and start the unit files so that they run on boot
 sudo systemctl enable /etc/systemd/kubelet.service
 sudo systemctl enable /etc/systemd/kube-proxy.service
 
-# Start the services
 sudo systemctl start kubelet.service
 sudo systemctl start kube-proxy.service
 ```
 
+## Configure Kubeconfig
+To administrate your cluster from a separate host, you will need the client and admin certificates generated earlier (`ca.pem`, `admin.pem`, `admin-key.pem`). With certificates in place, run the following commands with the appropriate filepaths.
+```
+kubectl config set-cluster calico-cluster --server=https://<KUBERNETES_MASTER> --certificate-authority=<CA_CERT_PATH>
+kubectl config set-credentials calico-admin --certificate-authority=<CA_CERT_PATH> --client-key=<ADMIN_KEY_PATH> --client-certificate=<ADMIN_CERT_PATH>
+kubectl config set-context calico --cluster=calico-cluster --user=calico-admin
+kubectl config use-context calico
+```
+
+Check your work with `kubectl get nodes`.
+
 ## Install the DNS Addon
 
-Most Kubernetes deployments will require the DNS addon for service discovery.  For more on DNS service discovery, check [here](../../cluster/addons/dns/).
+Most Kubernetes deployments will require the DNS addon for service discovery. To install DNS, create the skydns service and replication controller provided.
 
-The config repository for this guide comes with manifest files to start the DNS addon.  To install DNS, do the following on your Master node.
-
-Replace `<MASTER_IP>` in `calico-kubernetes-master/config/master/dns/skydns-rc.yaml` with your Master's IP address.  Then, create `skydns-rc.yaml` and `skydns-svc.yaml` using `kubectl create -f <FILE>`.
+```
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/dns/skydns.yaml
+kubectl create -f skydns.yaml
+```
 
 ## Launch other Services With Calico-Kubernetes
 
@@ -240,7 +275,7 @@ The simplest method for enabling connectivity from containers to the internet is
 We need to NAT traffic that has a destination outside of the cluster. Cluster-internal traffic includes the Kubernetes master/nodes, and the traffic within the container IP subnet. A suitable masquerade chain would follow this pattern below, replacing the following variables:
 - `CONTAINER_SUBNET`: The cluster-wide subnet from which container IPs are chosen. Run `ETCD_AUTHORITY=127.0.0.1:6666 calicoctl pool show` on the Kubernetes master to find your configured container subnet.
 - `KUBERNETES_HOST_SUBNET`: The subnet from which Kubernetes node / master IP addresses have been chosen.
-- `HOST_INTERFACE`: The interface on the Kubernetes node which is used for external connectivity.  The above example uses `eth0`
+- `HOST_INTERFACE`: The interface on the Kubernetes node which is used for external connectivity.
 
 ```
 sudo iptables -t nat -N KUBE-OUTBOUND-NAT
