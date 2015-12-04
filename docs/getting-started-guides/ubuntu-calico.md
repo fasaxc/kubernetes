@@ -47,7 +47,6 @@ On the Master:
 
 On each Node:
 - `kubelet`
-- `kube-proxy`
 - `calico-node`
 
 ## Prerequisites
@@ -86,10 +85,6 @@ We'll use the `kubelet` to bootstrap the Kubernetes master processes as containe
 sudo wget -N -P /usr/bin http://storage.googleapis.com/kubernetes-release/release/v1.1.2/bin/linux/amd64/kubectl
 sudo wget -N -P /usr/bin http://storage.googleapis.com/kubernetes-release/release/v1.1.2/bin/linux/amd64/kubelet
 sudo chmod +x /usr/bin/kubelet /usr/bin/kubectl
-
-# Install the `kubelet` and `kubectl` binaries.
-sudo cp -f kubernetes/server/bin/kubelet /usr/bin
-sudo cp -f kubernetes/server/bin/kubectl /usr/bin
 ```
 
 2.) Install the `kubelet` systemd unit file and start the `kubelet`.
@@ -98,8 +93,7 @@ On your master, download the `calico-kubernetes` repository, which contains the 
 
 ```
 # Install the unit file
-wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/kubelet.service
-sudo mv -f kubelet.service /etc/systemd
+sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/kubelet.service
 
 # Enable the unit file so that it runs on boot
 sudo systemctl enable /etc/systemd/kubelet.service
@@ -113,8 +107,7 @@ sudo systemctl start kubelet.service
 ```
 # Install the provided manifest
 sudo mkdir -p /etc/kubernetes/manifests
-wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/kubernetes-master.manifest
-sudo mv -f kubernetes-master.manifest /etc/kubernetes/manifests
+sudo wget -N -P /etc/kubernetes/manifests https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/kubernetes-master.manifest
 ```
 
 You should see the `etcd`, `apiserver`, `controller-manager`, `scheduler`, and `kube-proxy` containers running. It may take some time to download the docker images and settle dependencies - you can check if the containers are running using `docker ps`.
@@ -147,8 +140,7 @@ sudo mv calicoctl /usr/bin
 sudo docker pull calico/node:v0.12.0
 
 # Install, enable, and start the Calico service
-wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-node.service
-sudo mv calico-node.service /etc/systemd
+sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-node.service
 
 sudo systemctl enable /etc/systemd/calico-node.service
 sudo systemctl start calico-node.service
@@ -167,6 +159,29 @@ sudo mv -t /etc/kubernetes/ssl/ ca.pem worker.pem worker-key.pem
 # Set Permissions
 sudo chmod 600 /etc/kubernetes/ssl/worker-key.pem
 sudo chown root:root /etc/kubernetes/ssl/worker-key.pem
+```
+
+### Setup Worker Config
+With your certs in place, create a kubeconfig for worker authentication in `/etc/kubernetes/worker-kubeconfig.yaml` like so:
+```
+apiVersion: v1
+kind: Config
+clusters:
+- name: local
+  cluster:
+    server: https://<KUBERNETES_MASTER>:443
+    certificate-authority: /etc/kubernetes/ssl/ca.pem
+users:
+- name: kubelet
+  user:
+    client-certificate: /etc/kubernetes/ssl/worker.pem
+    client-key: /etc/kubernetes/ssl/worker-key.pem
+contexts:
+- context:
+    cluster: local
+    user: kubelet
+  name: kubelet-context
+current-context: kubelet-context
 ```
 
 ### Configure environment variables for `kubelet` process
@@ -200,8 +215,7 @@ sudo mv calicoctl /usr/bin
 sudo docker pull calico/node:v0.12.0
 
 # Install, enable, and start the Calico service
-wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/calico-node.service
-sudo mv calico-node.service /etc/systemd
+sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/calico-node.service
 
 sudo systemctl enable /etc/systemd/calico-node.service
 sudo systemctl start calico-node.service
@@ -214,30 +228,30 @@ sudo systemctl start calico-node.service
 ```
 
 # Get the Kubernetes Release.
-sudo wget -N -P /usr/bin http://storage.googleapis.com/kubernetes-release/release/v1.1.2/bin/linux/amd64/kube-proxy
 sudo wget -N -P /usr/bin http://storage.googleapis.com/kubernetes-release/release/v1.1.2/bin/linux/amd64/kubelet
-sudo chmod +x /usr/bin/kubelet /usr/bin/kube-proxy
-
-# Install the `kubelet` and `kube-proxy` binaries.
-sudo cp -f kubernetes/server/bin/kubelet /usr/bin
-sudo cp -f kubernetes/server/bin/kube-proxy /usr/bin
+sudo chmod +x /usr/bin/kubelet
 ```
 
-2.) Install the `kubelet` and `kube-proxy` systemd unit files.
+2.) Install the `kubelet` systemd unit file.
 
 ```
 # Install the unit files
-wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/kubelet.service
-wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/kube-proxy.service
-sudo mv -f kubelet.service /etc/systemd
-sudo mv -f kube-proxy.service /etc/systemd
+sudo wget -N -P /etc/systemd  https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/kubelet.service
 
 # Enable and start the unit files so that they run on boot
 sudo systemctl enable /etc/systemd/kubelet.service
-sudo systemctl enable /etc/systemd/kube-proxy.service
-
 sudo systemctl start kubelet.service
-sudo systemctl start kube-proxy.service
+```
+
+3.) Install the `kube-proxy` manifest
+```
+wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/kube-proxy.manifest
+```
+
+>Replace `<KUBERNETES_MASTER>` with your master's IP.
+
+```
+sudo mv kube-proxy.manifest /etc/kubernetes/manifests/
 ```
 
 ## Configure Kubeconfig
