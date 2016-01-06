@@ -137,25 +137,25 @@ We need to install Calico on the master even if it won't also be used to run pod
     sudo docker pull calico/node:v0.13.0
     ```
     
-3.  Download the `calico-node.env` template from the `calico-kubernetes` repository:
+3.  Download the `network-environment` template from the `calico-kubernetes` repository:
 
     ```
-    wget -O calico-node.env https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-node.env
+    wget -O network-environment https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/network-environment-template
     ```
 
-4.  Edit `calico-node.env` to represent this node's settings:
+4.  Edit `network-environment` to represent this node's settings:
 
-    -   Replace `<DEFAULT_IPV4>` with the IP address of the master.  This should be the source IP address used to reach the Kubernetes worker nodes.
+    -   Replace `<KUBERNETES_MASTER>` with the IP address of the master.  This should be the source IP address used to reach the Kubernetes worker nodes. 
 
-5.  Move `calico-node.env` into `/etc`:
+5.  Move `network-environment` into `/etc`:
 
     ```
-    sudo mv -f calico-node.env /etc
+    sudo mv -f network-environment /etc
     ```
 
 6.  Install, enable, and start the Calico service:
     ```
-    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-node.service
+    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/common/calico-node.service
     sudo systemctl enable /etc/systemd/calico-node.service
     sudo systemctl start calico-node.service
     ```
@@ -221,13 +221,13 @@ On your compute nodes, it is important that you install Calico before Kubernetes
     sudo docker pull calico/node:v0.13.0
     ```
 
-3.  Download the `calico-node.env` template from the `calico-kubernetes` repository:
+3.  Download the `network-environment` template from the `calico-kubernetes` repository:
 
     ```
-    wget -O calico-node.env https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/calico-node.env
+    wget -O network-environment https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/network-environment-template
     ```
 
-4.  Edit `calico-node.env` to represent this node's settings:
+4.  Edit `network-environment` to represent this node's settings:
 
     -   Replace `<DEFAULT_IPV4>` with the IP address of the node.
     -   Replace `<KUBERNETES_MASTER>` with the IP or hostname of the master.
@@ -237,20 +237,45 @@ On your compute nodes, it is important that you install Calico before Kubernetes
          kubectl describe secret default-token | grep token: | cut -f 2
          ```
 
-5.  Move `calico-node.env` into `/etc`:
+5.  Move `network-environment` into `/etc`:
 
     ```
-    sudo mv -f calico-node.env /etc
+    sudo mv -f network-environment /etc
     ```
     
 6.  Install the Calico service:
     ```
-    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/calico-node.service
+    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/common/calico-node.service
     sudo systemctl enable /etc/systemd/calico-node.service
     sudo systemctl start calico-node.service
     ```
     
-7.  Verify that Calico started correctly:
+7.  Install the Calico CNI plugins.
+
+    ```
+    sudo mkdir -p /opt/cni/bin/
+    sudo wget -N -P /opt/cni/bin/ https://github.com/projectcalico/calico-cni/releases/download/v0.2.0/calico
+    sudo wget -N -P /opt/cni/bin/ https://github.com/projectcalico/calico-cni/releases/download/v0.2.0/calico-ipam
+    sudo chmod +x /opt/cni/bin/calico /opt/cni/bin/calico-ipam
+    ```
+
+8.  Create a network definition file, which tells Kubernetes to create a network named `calico-k8s-network` and to use the calico plugins for that network.  Create file `/etc/cni/net.d/10-calico.conf` with the following contents, replacing `<KUBERNETES_MASTER>` with the IP of the master (this file should be the same on each node):
+
+    ```
+    {
+        "name": "calico-k8s-network",
+        "type": "calico",
+        "etcd_authority": "<KUBERNETES_MASTER>:6666",
+        "log_level": "info",
+        "ipam": {
+            "type": "calico-ipam"
+        }
+    }
+    ```
+    
+    Since this is the only network we create, it'll be used by default by the kubelet.
+
+9.  Verify that Calico started correctly:
 
     ```
     calicoctl status
@@ -278,7 +303,7 @@ On your compute nodes, it is important that you install Calico before Kubernetes
     +--------------+-----------+-------+-------+------+
     ```
     
-    If the "Info" column shows "Active" or some other value then Calico is having difficulty connecting to the other host.  Check the IP address of the peer is correct and check that Calico is using the correct local IP address (set in the `networking-environment` file above).
+    If the "Info" column shows "Active" or some other value then Calico is having difficulty connecting to the other host.  Check the IP address of the peer is correct and check that Calico is using the correct local IP address (set in the `network-environment` file above).
 
 ### Install Kubernetes on the Node
 
