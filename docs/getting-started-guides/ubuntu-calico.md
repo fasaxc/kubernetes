@@ -136,8 +136,24 @@ We need to install Calico on the master even if it won't also be used to run pod
     ```
     sudo docker pull calico/node:v0.13.0
     ```
+    
+3.  Download the `calico-node.env` template from the `calico-kubernetes` repository:
 
-3.  Install, enable, and start the Calico service:
+    ```
+    wget -O calico-node.env https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-node.env
+    ```
+
+4.  Edit `calico-node.env` to represent this node's settings:
+
+    -   Replace `<DEFAULT_IPV4>` with the IP address of the master.  This should be the source IP address used to reach the Kubernetes worker nodes.
+
+5.  Move `calico-node.env` into `/etc`:
+
+    ```
+    sudo mv -f calico-node.env /etc
+    ```
+
+6.  Install, enable, and start the Calico service:
     ```
     sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-node.service
     sudo systemctl enable /etc/systemd/calico-node.service
@@ -189,28 +205,6 @@ Worker nodes require three certificates, `ca.pem`, `worker.pem`, and `worker-key
     current-context: kubelet-context
     ```
 
-2.  Download the network-environment-template from the `calico-kubernetes` repository:
-
-    ```
-    wget -O network-environment https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/network-environment-template
-    ```
-
-3.  Edit `network-environment` to represent this node's settings:
-
-    -   Replace `<DEFAULT_IPV4>` with the IP address of the node.
-    -   Replace `<KUBERNETES_MASTER>` with the IP or hostname of the master.
-    -   Replace `<AUTH_TOKEN>` with a [service account token](http://kubernetes.io/v1.1/docs/user-guide/service-accounts.html). The following command (run on the master) shows the default token:
-        
-         ```
-         kubectl describe secret default-token | grep token: | cut -f 2
-         ```
-
-4.  Move `network-environment` into `/etc`:
-
-    ```
-    sudo mv -f network-environment /etc
-    ```
-
 ### Install Calico on the node
 
 On your compute nodes, it is important that you install Calico before Kubernetes. We'll install Calico using the provided `calico-node.service` systemd unit file:
@@ -227,12 +221,64 @@ On your compute nodes, it is important that you install Calico before Kubernetes
     sudo docker pull calico/node:v0.13.0
     ```
 
-3.  Install, enable, and start the Calico service:
+3.  Download the `calico-node.env` template from the `calico-kubernetes` repository:
+
+    ```
+    wget -O calico-node.env https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/calico-node.env
+    ```
+
+4.  Edit `calico-node.env` to represent this node's settings:
+
+    -   Replace `<DEFAULT_IPV4>` with the IP address of the node.
+    -   Replace `<KUBERNETES_MASTER>` with the IP or hostname of the master.
+    -   Replace `<AUTH_TOKEN>` with a [service account token](http://kubernetes.io/v1.1/docs/user-guide/service-accounts.html). The following command (run on the master) shows the default token:
+        
+         ```
+         kubectl describe secret default-token | grep token: | cut -f 2
+         ```
+
+5.  Move `calico-node.env` into `/etc`:
+
+    ```
+    sudo mv -f calico-node.env /etc
+    ```
+    
+6.  Install the Calico service:
     ```
     sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/calico-node.service
     sudo systemctl enable /etc/systemd/calico-node.service
     sudo systemctl start calico-node.service
     ```
+    
+7.  Verify that Calico started correctly:
+
+    ```
+    calicoctl status
+    ```
+    
+    should show that Felix (Calico's per-node agent) is running and the there should be a BGP status line for each other node that you've configured and the master.  The "Info" column should show "Established":
+    
+    ```
+    $ calicoctl status
+    calico-node container is running. Status: Up 15 hours
+    Running felix version 1.3.0rc5
+    
+    IPv4 BGP status
+    +---------------+-------------------+-------+----------+-------------+
+    |  Peer address |     Peer type     | State |  Since   |     Info    |
+    +---------------+-------------------+-------+----------+-------------+
+    | 172.18.203.41 | node-to-node mesh |   up  | 17:32:26 | Established |
+    | 172.18.203.42 | node-to-node mesh |   up  | 17:32:25 | Established |
+    +---------------+-------------------+-------+----------+-------------+
+    
+    IPv6 BGP status
+    +--------------+-----------+-------+-------+------+
+    | Peer address | Peer type | State | Since | Info |
+    +--------------+-----------+-------+-------+------+
+    +--------------+-----------+-------+-------+------+
+    ```
+    
+    If the "Info" column shows "Active" or some other value then Calico is having difficulty connecting to the other host.  Check the IP address of the peer is correct and check that Calico is using the correct local IP address (set in the `networking-environment` file above).
 
 ### Install Kubernetes on the Node
 
