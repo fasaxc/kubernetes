@@ -43,111 +43,142 @@ Specifically, this guide will have you do the following:
 
 ## Prerequisites
 
-1. At least three bare-metal machines (or VMs) to work with. This guide will configure them as follows:
-  - 1 Kubernetes Master
-  - 2 Kubernetes Nodes
-2. Your nodes should have IP connectivity.
+-   At least three bare-metal machines (or VMs) to work with. This guide will configure them as follows:
+    - 1 Kubernetes Master
+    - 2 Kubernetes Nodes
+-   Your nodes should have IP connectivity.
+-   This guide will set up a secure, TLS-authenticated API server. Before starting Kubernetes services, you will need to generate TLS Assets for secure client and worker authentication. The [guide for generating Kubernetes TLS Assets](https://coreos.com/kubernetes/docs/latest/openssl.html) explains how to use OpenSSL to generate the required assets.
 
 ## Cloud-config
 
 This guide will use [cloud-config](https://coreos.com/docs/cluster-management/setup/cloudinit-cloud-config/) to configure each of the nodes in our Kubernetes cluster.
 
 We'll use two cloud-config files:
-- `master-config.yaml`: Cloud-config for the Kubernetes master
-- `node-config.yaml`: Cloud-config for each Kubernetes node
+- `master-config.yaml`: cloud-config for the Kubernetes master
+- `node-config.yaml`: cloud-config for each Kubernetes node
 
 ## Download CoreOS
 
-Let's download the CoreOS bootable ISO.  We'll use this image to boot and install CoreOS on each server.
-
-```
-wget http://stable.release.core-os.net/amd64-usr/current/coreos_production_iso_image.iso
-```
-
-> You can also download the ISO from the [CoreOS website](https://coreos.com/docs/running-coreos/platforms/iso/).
+Download the CoreOS bootable ISO from the [CoreOS website](https://coreos.com/docs/running-coreos/platforms/iso/).
 
 ## Configure the Kubernetes Master
 
-Once you've downloaded the image, use it to boot your Kubernetes master.  Once booted, you should be automatically logged in as the `core` user.
+1.  Once you've downloaded the ISO image, boot your Kubernetes master from the image.  Once booted, you should be automatically logged in as the `core` user at the terminal. At this point CoreOS is running from the ISO and it hasn't been installed yet.
 
-*On another machine*, download the `calico-kubernetes` repository, which contains the necessary cloud-config files for this guide, and make a copy of the file `master-config-template.yaml`.
+2.  *On another machine*, download the the [template cloud-config](https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/cloud-config/master-config-template.yaml) and save it as `master-config.yaml`.
 
-```
-wget -O master-config.yaml https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/cloud-config/master-config-template.yaml
-```
+3.  Replace the following variables in the `master-config.yaml` file.
 
-You'll need to replace the following variables in the `master-config.yaml` file.
-- `<SSH_PUBLIC_KEY>`: The public key you will use for SSH access to this server.
+    - `<SSH_PUBLIC_KEY>`: The public key you will use for SSH access to this server.
 
-Move the edited `master-config.yaml` to your Kubernetes master machine.  The CoreOS bootable ISO comes with a tool called `coreos-install` which will allow us to install CoreOS and configure the machine using a cloud-config file.  The following command will download and install stable CoreOS using the `master-config.yaml` file we just created for configuration.  Run this on the Kubernetes master.
+4.  Copy the edited `master-config.yaml` to your Kubernetes master machine (using a USB stick, for example).  
 
-```
-sudo coreos-install -d /dev/sda -C stable -c master-config.yaml
-```
+5.  The CoreOS bootable ISO comes with a tool called `coreos-install` which will allow us to install CoreOS and configure the machine using a cloud-config file.  The following command will download and install stable CoreOS using the `master-config.yaml` file we just created for configuration.  Run this on the Kubernetes master.
+    
+    > **Warning:** this is a destructive operation that erases disk `sda` on your server.
+    
+    ```
+    sudo coreos-install -d /dev/sda -C stable -c master-config.yaml
+    ```
 
-Once complete, restart the server and boot into `/dev/sda`. When it comes back up, you should have SSH access as the `core` user using the public key provided in the `master-config.yaml` file.
+6.  Once complete, restart the server and boot from `/dev/sda` (you may need to remove the ISO image). When it comes back up, you should have SSH access as the `core` user using the public key provided in the `master-config.yaml` file.
 
-Next, you will need to configure your cluster's TLS assets. To get started with Kubernetes client certificate authentication, follow the [CoreOS guide to generating Kubernetes TLS assets using OpenSSL](https://coreos.com/kubernetes/docs/latest/openssl.html).
+## Configure TLS
 
-On your master, you will need to move your client and apiserver certificates to the `/etc/kubernetes/ssl/` folder with the appropriate permissions.
-```
-sudo mv -t /etc/kubernetes/ssl/ ca.pem apiserver.pem apiserver-key.pem
+The master requires the CA certificate, `ca.pem`; its own certificate, `apiserver.pem` and its private key, `apiserver-key.pem` (generated by following the steps linked above). 
 
-# Set Permissions
-sudo chmod 600 /etc/kubernetes/ssl/apiserver-key.pem
-sudo chown root:root /etc/kubernetes/ssl/apiserver-key.pem
-```
+1.  Send the three files to your master host (using `scp` for example).
+2.  Move them to the `/etc/kubernetes/ssl` folder and ensure that only the root user can read the key:
 
-If your apiserver did not restart to pick up these certificates, you can restart your kubelet to trigger a container refresh.
-```
-sudo systemctl restart kubelet
-```
+    ```
+    sudo mkdir -p /etc/kubernetes/ssl/
+    sudo mv -t /etc/kubernetes/ssl/ ca.pem apiserver.pem apiserver-key.pem
+    
+    # Set Permissions
+    sudo chmod 600 /etc/kubernetes/ssl/apiserver-key.pem
+    sudo chown root:root /etc/kubernetes/ssl/apiserver-key.pem
+    ```
 
-Before you configure the rest of your nodes, you will need to create an authentication token for Calico to access the API. Run the following command on your master or workstation and save the result.
-```
-kubectl create -f - <<EOF
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: calico
-EOF
-export AUTH_TOKEN=$(kubectl describe secret calico-token | grep token: | cut -f 2)
-```
+3.  Restart the kubelet to pick up the changes:
+
+    ```
+    sudo systemctl restart kubelet
+    ```
+
+4.  Before you configure the rest of your nodes, you will need to create an authentication token for Calico to access the API. Run the following command on your master and save the result.
+
+    ```
+    kubectl create -f - <<EOF
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: calico
+    EOF
+    export AUTH_TOKEN=$(kubectl describe secret calico-token | grep token: | cut -f 2)
+    ```
 
 
 ## Configure the compute hosts
 
->The following steps will set up a single Kubernetes node for use as a compute host.  Run these steps to deploy each Kubernetes node in your cluster.
+The following steps will set up a single Kubernetes node for use as a compute host.  Run these steps to deploy each Kubernetes node in your cluster.
 
-First, boot up the node machine using the bootable ISO we downloaded earlier.  You should be automatically logged in as the `core` user.
+1.  Boot up the node machine using the bootable ISO we downloaded earlier.  You should be automatically logged in as the `core` user.
 
-Make a copy of the `node-config-template.yaml` for this machine.
+2.  Make a copy of the [node cloud-config template](https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/cloud-config/node-config-template.yaml) for this machine.
 
-```
-wget -O node-config.yaml https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/cloud-config/node-config-template.yaml
-```
+3.  Replace the following placeholders in the `node-config.yaml` file to match your deployment.
 
-You'll need to replace the following variables in the `node-config.yaml` file to match your deployment.
-- `<HOSTNAME>`: Hostname for this node (e.g. kube-node1, kube-node2)
-- `<SSH_PUBLIC_KEY>`: The public key you will use for SSH access to this server.
-- `<KUBERNETES_MASTER>`: The IPv4 address of the Kubernetes master.
-- `<AUTH_TOKEN>`: The API authentication token generated in the previous step.
+    - `<HOSTNAME>`: Hostname for this node (e.g. kube-node1, kube-node2)
+    - `<SSH_PUBLIC_KEY>`: The public key you will use for SSH access to this server.
+    - `<KUBERNETES_MASTER>`: The IPv4 address of the Kubernetes master.
+    - `<AUTH_TOKEN>`: The API authentication token generated in the previous step.
 
-Next, you will need to add the certificates generated in the previous step to the cloud-config. Replace the following placeholders with your TLS assests.
-- `<CA_CERT>`: Complete contents of `ca.pem`
-- `<WORKER_CERT>`: Complete contents of `worker.pem`
-- `<WORKER_KEY>`: Complete contents of `worker-key.pem`
+4.  Replace the following placeholders with the contents of the appropriate certificate/key file.    
+    
+    - `<CA_CERT>`: Complete contents of `ca.pem`
+    - `<WORKER_CERT>`: Complete contents of `worker.pem`
+    - `<WORKER_KEY>`: Complete contents of `worker-key.pem`
+    
+    
+    > **Important:** Make sure you indent the entire file to match the indentation of the placeholder.  For example:
+    >
+    > ```
+    >  - path: /etc/kubernetes/ssl/ca.pem
+    >    owner: core
+    >    permissions: 0644
+    >    content: |
+    >      <CA_CERT>
+    > ```
+    >    
+    > should look like this once the certificate is in place:
+    > 
+    > ```
+    >   - path: /etc/kubernetes/ssl/ca.pem
+    >     owner: core
+    >     permissions: 0644
+    >     content: |
+    >       -----BEGIN CERTIFICATE-----
+    >       MIIC9zCCAd+gAwIBAgIJAJMnVnhVhy5pMA0GCSqGSIb3DQEBCwUAMBIxEDAOBgNV
+    >       ...<snip>...
+    >       QHwi1rNc8eBLNrd4BM/A1ZeDVh/Q9KxN+ZG/hHIXhmWKgN5wQx6/81FIFg==
+    >       -----END CERTIFICATE-----
+    > ```
+    
+    > **Important:** in a production deployment, embedding the secret key in cloud-config is a bad idea!  In production you should use an appropriate secret manager.
 
-Move the modified `node-config.yaml` to your Kubernetes node machine and install and configure CoreOS on the node using the following command.
+5.  Move the modified `node-config.yaml` to your Kubernetes node machine and install and configure CoreOS on the node using the following command.
+    
+    > **Warning:** this is a destructive operation that erases disk `sda` on your server.
+    
+    ```
+    sudo coreos-install -d /dev/sda -C stable -c node-config.yaml
+    ```
 
-```
-sudo coreos-install -d /dev/sda -C stable -c node-config.yaml
-```
-
-Once complete, restart the server and boot into `/dev/sda`. When it comes back up, you should have SSH access as the `core` user using the public key provided in the `node-config.yaml` file.  It will take some time for the node to be fully configured.
+6.  Once complete, restart the server and boot into `/dev/sda`. When it comes back up, you should have SSH access as the `core` user using the public key provided in the `node-config.yaml` file.  It will take some time for the node to be fully configured.
 
 ## Configure Kubeconfig
-To administrate your cluster from a separate host, you will need the client and admin certificates generated earlier (`ca.pem`, `admin.pem`, `admin-key.pem`). With certificates in place, run the following commands with the appropriate filepaths.
+To administer your cluster from a separate host, you will need the client and admin certificates generated earlier (`ca.pem`, `admin.pem`, `admin-key.pem`). With certificates in place, run the following commands with the appropriate filepaths.
+
 ```
 kubectl config set-cluster calico-cluster --server=https://<KUBERNETES_MASTER> --certificate-authority=<CA_CERT_PATH>
 kubectl config set-credentials calico-admin --certificate-authority=<CA_CERT_PATH> --client-key=<ADMIN_KEY_PATH> --client-certificate=<ADMIN_CERT_PATH>
