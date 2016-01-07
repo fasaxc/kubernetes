@@ -65,7 +65,7 @@ Download the CoreOS bootable ISO from the [CoreOS website](https://coreos.com/do
 
 1.  Once you've downloaded the ISO image, boot your Kubernetes master from the image.  Once booted, you should be automatically logged in as the `core` user at the terminal. At this point CoreOS is running from the ISO and it hasn't been installed yet.
 
-2.  *On another machine*, download the the [template cloud-config](https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/cloud-config/master-config-template.yaml) and save it as `master-config.yaml`.
+2.  *On another machine*, download the the [template cloud-config](https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/cloud-config/master-config-template.yaml) and save it as `master-config.yaml`.
 
 3.  Replace the following variables in the `master-config.yaml` file.
 
@@ -124,7 +124,7 @@ The following steps will set up a single Kubernetes node for use as a compute ho
 
 1.  Boot up the node machine using the bootable ISO we downloaded earlier.  You should be automatically logged in as the `core` user.
 
-2.  Make a copy of the [node cloud-config template](https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/cloud-config/node-config-template.yaml) for this machine.
+2.  Make a copy of the [node cloud-config template](https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/cloud-config/node-config-template.yaml) for this machine.
 
 3.  Replace the following placeholders in the `node-config.yaml` file to match your deployment.
 
@@ -193,7 +193,7 @@ Check your work with `kubectl get nodes`.
 Most Kubernetes deployments will require the DNS addon for service discovery. To install DNS, create the skydns service and replication controller provided.
 
 ```
-wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/dns/skydns.yaml
+wget https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/master/dns/skydns.yaml
 kubectl create -f skydns.yaml
 ```
 

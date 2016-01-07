@@ -84,7 +84,7 @@ We'll use the `kubelet` to bootstrap the Kubernetes master.
 
     ```
     # Install the unit file
-    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/kubelet.service
+    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/master/kubelet.service
     # Enable the unit file so that it runs on boot
     sudo systemctl enable /etc/systemd/kubelet.service
     # Start the kubelet service
@@ -95,7 +95,7 @@ We'll use the `kubelet` to bootstrap the Kubernetes master.
 
     ```
     sudo mkdir -p /etc/kubernetes/manifests
-    sudo wget -N -P /etc/kubernetes/manifests https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/kubernetes-master.manifest
+    sudo wget -N -P /etc/kubernetes/manifests https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/master/kubernetes-master.manifest
     ```
 
 4.  Check the progress by running `docker ps` repeatedly.  After a while, you should see the `etcd`, `apiserver`, `controller-manager`, `scheduler`, and `kube-proxy` containers running.
@@ -110,7 +110,7 @@ Calico needs its own etcd cluster to store its state.  In this guide we install 
 
 1.  Download the template manifest file:
     ```
-    wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/calico-etcd.manifest
+    wget https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/master/calico-etcd.manifest
     ```
 
 2.  Replace all instances of `<PRIVATE_IPV4>` in the `calico-etcd.manifest` file with your master's IP address. 
@@ -140,7 +140,7 @@ We need to install Calico on the master even if it won't also be used to run pod
 3.  Download the `network-environment` template from the `calico-kubernetes` repository:
 
     ```
-    wget -O network-environment https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/network-environment-template
+    wget -O network-environment https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/master/network-environment-template
     ```
 
 4.  Edit `network-environment` to represent this node's settings:
@@ -155,7 +155,7 @@ We need to install Calico on the master even if it won't also be used to run pod
 
 6.  Install, enable, and start the Calico service:
     ```
-    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/common/calico-node.service
+    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/common/calico-node.service
     sudo systemctl enable /etc/systemd/calico-node.service
     sudo systemctl start calico-node.service
     ```
@@ -221,10 +221,10 @@ On your compute nodes, it is important that you install Calico before Kubernetes
     sudo docker pull calico/node:v0.13.0
     ```
 
-3.  Download the `network-environment` template from the `calico-kubernetes` repository:
+3.  Download the `network-environment` template from the `calico-cni` repository:
 
     ```
-    wget -O network-environment https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/network-environment-template
+    wget -O network-environment https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/node/network-environment-template
     ```
 
 4.  Edit `network-environment` to represent this node's settings:
@@ -245,7 +245,7 @@ On your compute nodes, it is important that you install Calico before Kubernetes
     
 6.  Install the Calico service:
     ```
-    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/common/calico-node.service
+    sudo wget -N -P /etc/systemd https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/common/calico-node.service
     sudo systemctl enable /etc/systemd/calico-node.service
     sudo systemctl start calico-node.service
     ```
@@ -317,7 +317,7 @@ On your compute nodes, it is important that you install Calico before Kubernetes
 
     ```
     # Download the unit file.
-    sudo wget -N -P /etc/systemd  https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/kubelet.service
+    sudo wget -N -P /etc/systemd  https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/node/kubelet.service
     # Enable and start the unit files so that they run on boot
     sudo systemctl enable /etc/systemd/kubelet.service
     sudo systemctl start kubelet.service
@@ -325,7 +325,7 @@ On your compute nodes, it is important that you install Calico before Kubernetes
 
 3.  Install the `kube-proxy` manifest:
     ```
-    wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/node/kube-proxy.manifest
+    wget https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/node/kube-proxy.manifest
     ```
 
 4.  In that file, replace `<KUBERNETES_MASTER>` with your master's IP. Then move it into place:
@@ -353,7 +353,7 @@ Check your work with `kubectl get nodes`, which should succeed and display the n
 Most Kubernetes deployments will require the DNS addon for service discovery. To install DNS, create the skydns service and replication controller provided.  This step makes use of the kubectl configuration made above.
 
 ```
-wget https://raw.githubusercontent.com/projectcalico/calico-kubernetes/master/config/master/dns/skydns.yaml
+wget https://raw.githubusercontent.com/projectcalico/calico-cni/k8s-1.1-docs/samples/kubernetes/master/dns/skydns.yaml
 kubectl create -f skydns.yaml
 ```
 
