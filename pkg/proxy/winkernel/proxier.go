@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -102,11 +103,6 @@ type serviceInfo struct {
 	policyApplied            bool
 }
 
-type hnsNetworkInfo struct {
-	name string
-	id   string
-}
-
 func Log(v interface{}, message string, level glog.Level) {
 	glog.V(level).Infof("%s, %s", message, spew.Sdump(v))
 }
@@ -128,9 +124,9 @@ type endpointsInfo struct {
 	refCount   uint16
 }
 
-//Uses mac prefix and IPv4 address to return a mac address
-//This ensures mac addresses are unique for proper load balancing
-//Does not support IPv6 and returns a dummy mac
+// Uses mac prefix and IPv4 address to return a mac address
+// This ensures mac addresses are unique for proper load balancing
+// Does not support IPv6 and returns a dummy mac
 func conjureMac(macPrefix string, ip net.IP) string {
 	if ip4 := ip.To4(); ip4 != nil {
 		a, b, c, d := ip4[0], ip4[1], ip4[2], ip4[3]
@@ -396,7 +392,7 @@ type Proxier struct {
 	mu           sync.Mutex // protects the following fields
 	serviceMap   proxyServiceMap
 	endpointsMap proxyEndpointsMap
-	portsMap     map[localPort]closeable
+
 	// endpointsSynced and servicesSynced are set to true when corresponding
 	// objects are synced after startup. This is used to avoid updating hns policies
 	// with some partial data after kube-proxy restart.
@@ -420,7 +416,7 @@ type Proxier struct {
 	// precomputing some number of those and cache for future reuse.
 	precomputedProbabilities []string
 
-	network hnsNetworkInfo
+	networkNameMatch *regexp.Regexp
 }
 
 type localPort struct {
@@ -481,20 +477,18 @@ func NewProxier(
 	healthChecker := healthcheck.NewServer(hostname, recorder, nil, nil) // use default implementations of deps
 
 	// TODO : Make this a param
-	hnsNetworkName := os.Getenv("KUBE_NETWORK")
-	if len(hnsNetworkName) == 0 {
+	hnsNetworkNamePattern := os.Getenv("KUBE_NETWORK")
+	if len(hnsNetworkNamePattern) == 0 {
 		return nil, fmt.Errorf("Environment variable KUBE_NETWORK not initialized")
 	}
-	hnsNetwork, err := getHnsNetworkInfo(hnsNetworkName)
+	networkNameMatch, err := regexp.Compile(hnsNetworkNamePattern)
 	if err != nil {
-		glog.Fatalf("Unable to find Hns Network specified by %s. Please check environment variable KUBE_NETWORK", hnsNetworkName)
-		return nil, err
+		return nil, fmt.Errorf("Environment variable KUBE_NETWORK not a valid regex")
 	}
 
-	glog.V(1).Infof("Hns Network loaded with info = %v", hnsNetwork)
+	glog.V(1).Infof("Will apply rules to HN networks matching %s", hnsNetworkNamePattern)
 
 	proxier := &Proxier{
-		portsMap:         make(map[localPort]closeable),
 		serviceMap:       make(proxyServiceMap),
 		serviceChanges:   newServiceChangeMap(),
 		endpointsMap:     make(proxyEndpointsMap),
@@ -507,7 +501,7 @@ func NewProxier(
 		recorder:         recorder,
 		healthChecker:    healthChecker,
 		healthzServer:    healthzServer,
-		network:          *hnsNetwork,
+		networkNameMatch: networkNameMatch,
 	}
 
 	burstSyncs := 2
@@ -602,7 +596,7 @@ func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, vip string,
 
 		}
 	}
-	//TODO: sourceVip is not used. If required, expose this as a param
+	// TODO: sourceVip is not used. If required, expose this as a param
 	var sourceVip string
 	lb, err := hcsshim.AddLoadBalancer(
 		endpoints,
@@ -655,20 +649,10 @@ func deleteHnsEndpoint(hnsID string) {
 	glog.V(3).Infof("Remote endpoint resource deleted id %s", hnsID)
 }
 
-func getHnsNetworkInfo(hnsNetworkName string) (*hnsNetworkInfo, error) {
-	hnsnetwork, err := hcsshim.GetHNSNetworkByName(hnsNetworkName)
-	if err != nil {
-		glog.Errorf("%v", err)
-		return nil, err
-	}
-
-	return &hnsNetworkInfo{
-		id:   hnsnetwork.Id,
-		name: hnsnetwork.Name,
-	}, nil
-}
-
 func getHnsEndpointByIpAddress(ip net.IP, networkName string) (*hcsshim.HNSEndpoint, error) {
+	glog.V(5).Infof("Looking for endpoint with IP %s in %s",
+		ip.String(), networkName)
+
 	hnsnetwork, err := hcsshim.GetHNSNetworkByName(networkName)
 	if err != nil {
 		glog.Errorf("%v", err)
@@ -677,10 +661,15 @@ func getHnsEndpointByIpAddress(ip net.IP, networkName string) (*hcsshim.HNSEndpo
 
 	endpoints, err := hcsshim.HNSListEndpointRequest()
 	for _, endpoint := range endpoints {
-		equal := reflect.DeepEqual(endpoint.IPAddress, ip)
-		if equal && endpoint.VirtualNetwork == hnsnetwork.Id {
-			return &endpoint, nil
+		if ! endpoint.IPAddress.Equal(ip) {
+			continue
 		}
+		if endpoint.VirtualNetwork != hnsnetwork.Id {
+			glog.V(5).Infof("Found match in wrong network %v",
+				endpoint.VirtualNetwork)
+			continue
+		}
+		return &endpoint, nil
 	}
 
 	return nil, fmt.Errorf("Endpoint %v not found on network %s", ip, networkName)
@@ -936,6 +925,12 @@ func (proxier *Proxier) syncProxyRules() {
 	proxier.mu.Lock()
 	defer proxier.mu.Unlock()
 
+	networks, err := hcsshim.HNSListNetworkRequest("GET", "", "")
+	if err != nil {
+		glog.Errorf("Error getting HNS networks: %v", err)
+		return
+	}
+
 	start := time.Now()
 	defer func() {
 		SyncProxyRulesLatency.Observe(sinceInMicroseconds(start))
@@ -962,8 +957,6 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 	}
 
-	glog.V(3).Infof("Syncing Policies")
-
 	// Program HNS by adding corresponding policies for each service.
 	for svcName, svcInfo := range proxier.serviceMap {
 		if svcInfo.policyApplied {
@@ -977,7 +970,6 @@ func (proxier *Proxier) syncProxyRules() {
 
 		for _, ep := range proxier.endpointsMap[svcName] {
 			var newHnsEndpoint *hcsshim.HNSEndpoint
-			hnsNetworkName := proxier.network.name
 			var err error
 
 			// targetPort is zero if it is specified as a name in port.TargetPort, so the real port should be got from endpoints.
@@ -991,34 +983,58 @@ func (proxier *Proxier) syncProxyRules() {
 				newHnsEndpoint, err = hcsshim.GetHNSEndpointByID(ep.hnsID)
 			}
 
-			if newHnsEndpoint == nil {
-				// First check if an endpoint resource exists for this IP, on the current host
-				// A Local endpoint could exist here already
-				// A remote endpoint was already created and proxy was restarted
-				newHnsEndpoint, err = getHnsEndpointByIpAddress(net.ParseIP(ep.ip), hnsNetworkName)
-			}
+			{
+				hnsNetworkName := ""
+				if newHnsEndpoint == nil {
+					// We don't have a cached endpoint ID, scan all the matching networks for an existing endpoint.
+					for _, n := range networks {
+						hnsNetworkName = n.Name
 
-			if newHnsEndpoint == nil {
-				if ep.isLocal {
-					glog.Errorf("Local endpoint not found for %v: err: %v on network %s", ep.ip, err, hnsNetworkName)
-					continue
-				}
-				// hns Endpoint resource was not found, create one
-				hnsnetwork, err := hcsshim.GetHNSNetworkByName(hnsNetworkName)
-				if err != nil {
-					glog.Errorf("%v", err)
-					continue
+						if !proxier.networkNameMatch.MatchString(hnsNetworkName) {
+							glog.V(5).Infof("Ignoring network %s", hnsNetworkName)
+							continue
+						}
+
+						// First check if an endpoint resource exists for this IP, on the current host
+						// A Local endpoint could exist here already
+						// A remote endpoint was already created and proxy was restarted
+						newHnsEndpoint, err = getHnsEndpointByIpAddress(net.ParseIP(ep.ip), hnsNetworkName)
+						if err == nil && newHnsEndpoint != nil {
+							glog.V(5).Infof("Found endpoint %s in network %s",
+								newHnsEndpoint.Id, hnsNetworkName)
+							break
+						}
+					}
 				}
 
-				hnsEndpoint := &hcsshim.HNSEndpoint{
-					MacAddress: ep.macAddress,
-					IPAddress:  net.ParseIP(ep.ip),
-				}
+				if newHnsEndpoint == nil {
+					if ep.isLocal {
+						glog.Errorf("Local endpoint not found for %v: err: %v", ep.ip, err)
+						continue
+					}
+					if hnsNetworkName == "" {
+						glog.Errorf("No HNS networks available to create remote endpoint")
+						continue
+					}
+					// hns Endpoint resource was not found, create one
+					glog.V(5).Infof("Creating remote endpoint for %s in network %s",
+						ep.ip, hnsNetworkName)
+					hnsnetwork, err := hcsshim.GetHNSNetworkByName(hnsNetworkName)
+					if err != nil {
+						glog.Errorf("Failed to look up network %v", err)
+						continue
+					}
 
-				newHnsEndpoint, err = hnsnetwork.CreateRemoteEndpoint(hnsEndpoint)
-				if err != nil {
-					glog.Errorf("Remote endpoint creation failed: %v", err)
-					continue
+					hnsEndpoint := &hcsshim.HNSEndpoint{
+						MacAddress: ep.macAddress,
+						IPAddress:  net.ParseIP(ep.ip),
+					}
+
+					newHnsEndpoint, err = hnsnetwork.CreateRemoteEndpoint(hnsEndpoint)
+					if err != nil {
+						glog.Errorf("Remote endpoint creation failed: %v", err)
+						continue
+					}
 				}
 			}
 
@@ -1141,7 +1157,6 @@ func (proxier *Proxier) syncProxyRules() {
 		// TODO : Check if this is required to cleanup stale services here
 		glog.V(5).Infof("Pending delete stale service IP %s connections", svcIP)
 	}
-
 }
 
 type endpointServicePair struct {
