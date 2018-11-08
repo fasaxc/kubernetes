@@ -217,13 +217,13 @@ func (plugin *cniNetworkPlugin) SetUpPod(namespace string, name string, id kubec
 
 	// Windows doesn't have loNetwork. It comes only with Linux
 	if plugin.loNetwork != nil {
-		if _, err = plugin.addToNetwork(plugin.loNetwork, name, namespace, id, netnsPath); err != nil {
+		if _, err = plugin.addToNetwork(plugin.loNetwork, name, namespace, id, netnsPath, nil); err != nil {
 			glog.Errorf("Error while adding to cni lo network: %s", err)
 			return err
 		}
 	}
 
-	_, err = plugin.addToNetwork(plugin.getDefaultNetwork(), name, namespace, id, netnsPath)
+	_, err = plugin.addToNetwork(plugin.getDefaultNetwork(), name, namespace, id, netnsPath, nil)
 	if err != nil {
 		glog.Errorf("Error while adding to cni network: %s", err)
 		return err
@@ -246,8 +246,8 @@ func (plugin *cniNetworkPlugin) TearDownPod(namespace string, name string, id ku
 	return plugin.deleteFromNetwork(plugin.getDefaultNetwork(), name, namespace, id, netnsPath)
 }
 
-func (plugin *cniNetworkPlugin) addToNetwork(network *cniNetwork, podName string, podNamespace string, podSandboxID kubecontainer.ContainerID, podNetnsPath string) (cnitypes.Result, error) {
-	rt, err := plugin.buildCNIRuntimeConf(podName, podNamespace, podSandboxID, podNetnsPath)
+func (plugin *cniNetworkPlugin) addToNetwork(network *cniNetwork, podName string, podNamespace string, podSandboxID kubecontainer.ContainerID, podNetnsPath string, options map[string]string) (cnitypes.Result, error) {
+	rt, err := plugin.buildCNIRuntimeConf(podName, podNamespace, podSandboxID, podNetnsPath, options)
 	if err != nil {
 		glog.Errorf("Error adding network when building cni runtime conf: %v", err)
 		return nil, err
@@ -265,7 +265,7 @@ func (plugin *cniNetworkPlugin) addToNetwork(network *cniNetwork, podName string
 }
 
 func (plugin *cniNetworkPlugin) deleteFromNetwork(network *cniNetwork, podName string, podNamespace string, podSandboxID kubecontainer.ContainerID, podNetnsPath string) error {
-	rt, err := plugin.buildCNIRuntimeConf(podName, podNamespace, podSandboxID, podNetnsPath)
+	rt, err := plugin.buildCNIRuntimeConf(podName, podNamespace, podSandboxID, podNetnsPath, nil)
 	if err != nil {
 		glog.Errorf("Error deleting network when building cni runtime conf: %v", err)
 		return err
@@ -283,7 +283,7 @@ func (plugin *cniNetworkPlugin) deleteFromNetwork(network *cniNetwork, podName s
 	return nil
 }
 
-func (plugin *cniNetworkPlugin) buildCNIRuntimeConf(podName string, podNs string, podSandboxID kubecontainer.ContainerID, podNetnsPath string) (*libcni.RuntimeConf, error) {
+func (plugin *cniNetworkPlugin) buildCNIRuntimeConf(podName string, podNs string, podSandboxID kubecontainer.ContainerID, podNetnsPath string, options map[string]string) (*libcni.RuntimeConf, error) {
 	glog.V(4).Infof("Got netns path %v", podNetnsPath)
 	glog.V(4).Infof("Using podns path %v", podNs)
 
@@ -319,6 +319,14 @@ func (plugin *cniNetworkPlugin) buildCNIRuntimeConf(podName string, podNs string
 	}
 	rt.CapabilityArgs = map[string]interface{}{
 		"portMappings": portMappingsParam,
+	}
+
+	// On Windows, kubelet needs a way to look up the pod IP but the HNS API doesn't expose a way
+	// to do that and the planned API isn't ready yet.  As a workaround, we send a "lookupOnly"
+	// ADD request.
+	if lookupOnly, _ := options["lookupOnly"]; lookupOnly == "true" {
+		glog.V(4).Infof("Setting lookupOnly flag.")
+		rt.CapabilityArgs["lookupOnly"] = true
 	}
 
 	return rt, nil
