@@ -21,6 +21,7 @@ package winkernel
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Microsoft/hcsshim/hcn"
 	"net"
 	"os"
 	"reflect"
@@ -29,8 +30,6 @@ import (
 	"time"
 
 	"github.com/Microsoft/hcsshim"
-	"github.com/Microsoft/hcsshim/hcn"
-
 	"github.com/davecgh/go-spew/spew"
 	"k8s.io/klog"
 
@@ -506,7 +505,12 @@ func NewProxier(
 
 	healthChecker := healthcheck.NewServer(hostname, recorder, nil, nil) // use default implementations of deps
 	var hns HostNetworkService
-	hns = hnsV1{}
+	supportedFeatures := hcn.GetSupportedFeatures() //TODO Create RemoteSubnet Feature
+	if supportedFeatures.Api.V2 {
+		hns = hnsV2{}
+	} else {
+		hns = hnsV1{}
+	}
 
 	// TODO : Make this a param
 	hnsNetworkName := os.Getenv("KUBE_NETWORK")
@@ -532,10 +536,7 @@ func NewProxier(
 	var sourceVip string
 	var hostMac string
 	if hnsNetwork.Type == "Overlay" {
-		supportedFeatures := hcn.GetSupportedFeatures() //TODO Create RemoteSubnet Feature
-		if supportedFeatures.Api.V2 {
-			hns = hnsV2{}
-		} else {
+		if ! supportedFeatures.Api.V2 {
 			return nil, fmt.Errorf("Overlay is only supported on RS5 or greater")
 		}
 		sourceVip = config.SourceVip
